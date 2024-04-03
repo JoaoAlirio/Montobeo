@@ -1,0 +1,167 @@
+// this script implements MaxEnt modeling of 1 esp and calculates Mann-Kendall trends
+// calls two secondary scripts
+
+////////// imports
+var montesinho = ee.FeatureCollection("users/alirio/Montesinho_WGS_84");
+var grid = ee.FeatureCollection("users/alirio/Grid_1x1km_PNM-N_WGS84_Mercartor");
+var pnmm = ee.FeatureCollection("users/alirio/PNM-N_WGS84");
+
+
+var specie = 'Cervus_elaphus';
+var years = ee.List.sequence(2001, 2003);
+var replics = ee.List.sequence(1, 2);
+
+// Generate Background random points in presences region
+var Background = ee.FeatureCollection.randomPoints(montesinho, 857);
+
+
+////////// presence data
+
+var presenceData = ee.FeatureCollection("users/alirio/montobeo/species_modelling_2023_10_10")
+              .filter(ee.Filter.eq('Species', specie));
+
+//criar grid só com celulas com presenças da especie
+var specieGrid = grid.filterBounds(presenceData)
+
+var trainingData = presenceData.map(function(feature){
+    return feature.select([]).set('presence',1);
+  })
+  .merge(Background.map(function(feature){
+    return feature.select([]).set('presence',0);
+  }));
+
+
+    var maxentCollection = ee.ImageCollection(years.map(function (year){
+      
+      var ano = ee.String(ee.Number(year).toShort())
+      
+      var yearBand = ee.Image.constant(ee.Number(year)).toShort().rename('Year');
+
+      // ****** chama módulo calculo LandStack variaveis para este year ******
+      var imgVar = landStackYear.variables(year);
+      // Sample the image at the location of the points.
+      var training = imgVar.sampleRegions({collection: trainingData, scale: 1000});
+        
+      //compute n replicas of maxent
+      var repCollection = ee.ImageCollection(replics.map(function(replication) {
+        
+        
+        // Train the Maxent classifier from the image-sampled points.
+        var classifier = ee.Classifier.amnhMaxent({randomTestPoints: 30, seed: replication}).train({
+              features: training,
+              classProperty: 'presence',
+              inputProperties: imgVar.bandNames()
+        });
+
+        return ee.Image(imgVar.classify(classifier)
+                        )//.set('Year', year))
+                        .addBands([yearBand]);
+
+        
+      })); // end of cycle by replica => replicas collection
+      
+         
+      return(repCollection.mean().float().set('Year', year, 'Specie', specie));
+          
+    })); // end of cycle by year => maxentColection by specie
+
+
+Map.addLayer(maxentCollection.mean().select('probability'),
+{palette:["ffffff","018bff"]}, 'Habitat suitability');
+
+////////// get Mann-Kendall pValues ///////////////////
+
+var p = mannKendall.mk_results(maxentCollection.select('probability'));  
+var p05 = p.lte(0.05);
+
+
+///////// compute Sen's Slope /////////////////
+
+// Select the bands to model with the independent variable first.
+var sSlope = maxentCollection.select(['Year', 'probability'])
+            .reduce(ee.Reducer.sensSlope()).select('slope').toFloat();
+
+///////// results /////////////////
+
+//var imgResults = maxentCollection.select('probability').toBands().addBands([sSlope, p]);
+
+var visualization = {bands: ["slope"], max: 0.04, min: -0.04, palette: ["ff0000","ffffff","019017"]}
+
+
+Map.addLayer(sSlope, visualization, 'results (Sen Slope)');
+Map.addLayer(sSlope.clip(specieGrid), visualization, 'presences results');
+
+var signifResults = sSlope.updateMask(p05)
+Map.addLayer(signifResults, visualization, 'significant results');
+
+Map.addLayer(signifResults.clip(specieGrid), visualization, 'significant and presences');
+
+
+///////////// evaluation //////////////////
+
+    var maxentFeatureCollection = ee.FeatureCollection(years.map(function (year){
+      
+      var yearString = ee.String(ee.Number(year).toShort());
+      var yearBand = ee.Image.constant(ee.Number(year)).toShort().rename('Year');
+
+      // ****** chama módulo calculo LandStack variaveis para este year ******
+      var imgVar = landStackYear.variables(year);
+      // Sample the image at the location of the points.
+      var training = imgVar.sampleRegions({collection: trainingData, scale: 1000});
+        
+      //compute 10 replicas of maxent to Evaluation
+      var repFeatureCollection = ee.FeatureCollection(replics.map(function(replication) {
+        
+        
+        // Train the Maxent classifier from the image-sampled points.
+        var classifier = ee.Classifier.amnhMaxent({randomTestPoints: 30, seed: replication}).train({
+              features: training,
+              classProperty: 'presence',
+              inputProperties: imgVar.bandNames()
+        });
+        
+            // Get information about the trained classifier.
+        
+        var iterations = classifier.explain().get('Iterations')
+        var trainAUC = classifier.explain().get('Training AUC')
+        var testAUC = classifier.explain().get('Test AUC')
+        var trainSamples = classifier.explain().get('Number of training samples')
+        var testSamples = classifier.explain().get('Number of test samples')
+        
+        var thresholds = ee.Dictionary(ee.Dictionary(classifier.explain().get('Thresholds'))
+                .get('Equal training sensitivity and specificity'))
+                .get('Cloglog threshold');
+        
+        var contributions = ee.Dictionary(classifier.explain().get('Contributions'))
+          var aab = contributions.get('AAB')
+          var evi = contributions.get('EVI')
+          var lstd = contributions.get('LST_Day')
+          var lstn = contributions.get('LST_Night')
+          var sr = contributions.get('SR')
+          var tsf = contributions.get('TSF')
+          
+          var parameters = classifier.explain().get('parameters')
+
+        
+        return ee.Feature(null).set('replication', replication, 'iterations', iterations,
+              'trainAUC', trainAUC, 'trainSamples', trainSamples,
+              'testAUC', testAUC, 'testSamples', testSamples,
+              'cloglogThreshold', thresholds,
+              'contrib_AAB', aab, 'contrib_EVI', evi,
+              'contrib_LST_Day', lstd, 'contrib_LST_Night', lstn,
+              'contrib_SR', sr, 'contrib_TSF', tsf, 'parameters', parameters);
+        
+      })); // end of cycle by replica => replicas Feature collection
+
+      
+        var periodFeatures = repFeatureCollection.map(function(feature){
+          return feature.set('Year', yearString, 'Specie', specie);
+        });
+      return periodFeatures;
+          
+    })); // end of cycle by year => maxentColection by specie
+
+maxentFeatureCollection = maxentFeatureCollection.flatten();
+
+print('maxentFeatureCollection', ui.Chart.feature.byFeature(maxentFeatureCollection).setChartType('Table'));
+
