@@ -1,18 +1,17 @@
 // predictors.js - secondary script called by the main maxent modeling script
 
-var Grid = ee.FeatureCollection("users/alirio/Grid_1x1km_PNM-N_WGS84_Mercartor");
-var img_vazia = ee.Image(0);
-  
-  
-// _______ For each year ________
+
+var grid = ee.FeatureCollection("users/alirio/Grids/grid_1km_PNM_N_epsg3763");
+
+// _______ By year ________
 
 exports.variables = function(year) {
 
-var Nextyear = ee.Number(year).add(1);
+var nextYear = ee.Number(year).add(1).toFloat();
+var imgYear = ee.Image().set('Year', year).select();
 
-  var imgYear = img_vazia.set('Year', year).select();
 
-  // ______ AAB ______
+  // ______ prepare MODIS Burned Area to AAB and TSF ______
 
   var datasetFire = ee.ImageCollection('MODIS/061/MCD64A1');
 
@@ -24,100 +23,83 @@ var Nextyear = ee.Number(year).add(1);
       var Adjusted_value = Mask.gte(1).rename('AAB');
       return img.addBands(Adjusted_value, null, true).addBands(imgYear);
     });
-
-  var datasetFireAAB = datasetFire.filter(ee.Filter.calendarRange(year, year, 'year')); 
     
-    var AAB_year = datasetFireAAB.max();
+  // ________________ AAB _______________
 
-    // Add the mean of each image as new properties of each feature.
-    var AAB_means = AAB_year.reduceRegions({
-      collection: Grid,
-      reducer: ee.Reducer.max(),
-      scale: datasetFire.first().projection().nominalScale(), //Product scale
-      crs: datasetFire.first().projection() //Product native scale
-    }).filter(ee.Filter.notNull(['AAB']));
-  
+  // obtain later burned pixels
+  var AAB_year = datasetFire
+        .filter(ee.Filter.calendarRange(year, year, 'year'))
+        .max()
+        .setDefaultProjection(  //(re)set projection
+          datasetFire.first().projection(), null,
+          datasetFire.first().projection().nominalScale())
+        .select('AAB');
 
-    // Feature to Image
-    var AAB_1km = AAB_means.reduceToImage({
-      properties: ['AAB'],
-      reducer: ee.Reducer.mean()
-    });
-  
-    // add mean as band in the final result image
-    imgYear = imgYear.addBands(AAB_1km.select('mean').unmask(0).rename('AAB'), null);
+  // Reduce Resolution to 1000m and reproject
+  var meanAAB_RR = AAB_year
+    .reduceResolution({reducer: ee.Reducer.mean()})
+    .reproject({crs: 'EPSG:3763', scale: 1000});
+
+  // add AAB band to imgYear, with zero on nullvalues
+  imgYear = imgYear.addBands(meanAAB_RR).unmask(0);
 
 
-  // ______ EVI ______
-  
-  
-  var datasetEVI = ee.ImageCollection("MODIS/061/MOD13Q1") //available from the year 2000-02-18 (MOD13Q1.061)
-    .filter(ee.Filter.calendarRange(year, year, 'year'));
-            
+  // _______________ EVI ________________
+
+  var datasetEVI = ee.ImageCollection("MODIS/061/MOD13Q1")
+      .filter(ee.Filter.calendarRange(year, year, 'year'));
+
   // ___ apply quality mask _ and _ scaling factors__
-
   datasetEVI = datasetEVI.map(function(image) {
     var QA = image.select('SummaryQA');
     var mask = QA.lte(0);
     var valor_ajustado = image.select('EVI').multiply(0.0001);
     return image.addBands(valor_ajustado, null, true).updateMask(mask);
-  });
+  }).select('EVI');
 
-  var datasetEVImean = datasetEVI.mean();
+  //compute collection average and (re)set projection
+  var meanEVI = datasetEVI.mean().setDefaultProjection(
+    datasetEVI.first().projection(), null,
+    datasetEVI.first().projection().nominalScale()
+    );
 
-    //comput means on grid
-    var EVI_means = datasetEVImean.reduceRegions({
-      collection: Grid,
-      reducer: ee.Reducer.mean(),
-      scale: datasetEVI.first().projection().nominalScale(), //Product scale
-      crs: datasetEVI.first().projection() //Product native scale
-    }).filter(ee.Filter.notNull(['EVI']));
+  // Reduce Resolution to 1000m and reproject
+  var meanEVI_RR = meanEVI
+    .reduceResolution({reducer: ee.Reducer.mean()})
+    .reproject({crs: 'EPSG:3763', scale: 1000});
 
-    // Feature to Image
-    var EVI_1km = EVI_means.reduceToImage({
-      properties: ['EVI'],
-      reducer: ee.Reducer.mean()
-    });
+  // add band to imgYear
+  imgYear = imgYear.addBands(meanEVI_RR);
+
+
+  // ______ LST Day ______
   
-    // add mean as band in the final result image
-    imgYear = imgYear.addBands(EVI_1km.select('mean').rename('EVI'), null);
-
-
-  // ______ LST Day ______ daily
-  
-
   var datasetLST = ee.ImageCollection("MODIS/061/MOD11A1")
-    .filter(ee.Filter.calendarRange(year, year, 'year'));
+      .filter(ee.Filter.calendarRange(year, year, 'year'));
 
   // ___ Function to apply quality mask __
-
   var datasetLSTd = datasetLST.map(function(image) {
-    var QC_Day = image.select('QC_Day').bitwiseAnd(3)//.unmask();
+    var QC_Day = image.select('QC_Day').bitwiseAnd(3).unmask();
     var mask = QC_Day.eq(0);
     var Adjusted_value = image.select('LST_Day_1km').multiply(0.02).subtract(273.15);
     return image.addBands(Adjusted_value, null, true).updateMask(mask);
-  });
+  }).select('LST_Day_1km');
 
-  datasetLSTd = datasetLSTd.mean();
+  //compute collection average and (re)set projection
+  var meanLSTd = datasetLSTd.mean().setDefaultProjection(
+    datasetLSTd.first().projection(), null,
+    datasetLSTd.first().projection().nominalScale()
+    );
 
-    // Add the mean of each image as new properties of each feature.
-    var LSTd_means = datasetLSTd.reduceRegions({
-      collection: Grid,
-      reducer: ee.Reducer.mean(),
-      scale: datasetLST.first().projection().nominalScale(), //Product scale
-      crs: datasetLST.first().projection() //Product native projection
-    }).filter(ee.Filter.notNull(['LST_Day_1km']));
+  // Reduce Resolution to 1000m and reproject
+  var meanLSTd_RR = meanLSTd
+    .reduceResolution({reducer: ee.Reducer.mean()})
+    .reproject({crs: 'EPSG:3763', scale: 1000})
+    .rename('LST_Day');
 
-  
-    // Feature to Image
-    var LSTd_1km = LSTd_means.reduceToImage({
-      properties: ['LST_Day_1km'],
-      reducer: ee.Reducer.mean()
-    });
-  
-    // add mean as band in the final result image
-    imgYear = imgYear.addBands(LSTd_1km.select('mean').rename('LST_Day'), null);
-  
+  // add band to imgYear
+  imgYear = imgYear.addBands(meanLSTd_RR);
+
 
   // ______ LST night ______
   
@@ -126,36 +108,28 @@ var Nextyear = ee.Number(year).add(1);
   var mask = QCn.eq(0);
   var Adjusted_value = image.select('LST_Night_1km').multiply(0.02).add(0).subtract(273.15);
   return image.addBands(Adjusted_value, null, true).updateMask(mask);
-});
+  }).select('LST_Night_1km');
   
-    datasetLSTn = datasetLSTn.mean();
+    //compute collection average and (re)set projection
+  var meanLSTn = datasetLSTn.mean().setDefaultProjection(
+    datasetLSTn.first().projection(), null,
+    datasetLSTn.first().projection().nominalScale()
+    );
 
-    // Add the mean of each image as new properties of each feature.
+  // Reduce Resolution to 1000m and reproject
+  var meanLSTn_RR = meanLSTn
+    .reduceResolution({reducer: ee.Reducer.mean()})
+    .reproject({crs: 'EPSG:3763', scale: 1000})
+    .rename('LST_Night');
 
-    var LSTn_means = datasetLSTn.reduceRegions({
-      collection: Grid,
-      reducer: ee.Reducer.mean(),
-      scale: datasetLST.first().projection().nominalScale(), //Product scale
-      crs: datasetLST.first().projection() //Product native projection
-    }).filter(ee.Filter.notNull(['LST_Night_1km']));
-  
-  
-    // Feature to Image
+  // add band to imgYear
+  imgYear = imgYear.addBands(meanLSTn_RR);
 
-    var LSTn_1km = LSTn_means.reduceToImage({
-      properties: ['LST_Night_1km'],
-      reducer: ee.Reducer.mean()
-    });
-  
-    // add mean as band in the final result image
-    imgYear = imgYear.addBands(LSTn_1km.select('mean').rename('LST_Night'), null);
-  
 
-  // ______ SR ______
-  
+  // _______________ SR __________________
   
   var datasetSR = ee.ImageCollection("MODIS/061/MOD09Q1")
-    .filter(ee.Filter.calendarRange(year, year, 'year')); //avaible from the year 2000-02-18 (MOD09Q1.061)
+    .filter(ee.Filter.calendarRange(year, year, 'year'));
 
     // ___ apply quality mask _ and _ scaling factors__
 
@@ -164,27 +138,23 @@ var Nextyear = ee.Number(year).add(1);
     var Mask = QA.eq(0);
     var valor_ajustado = image.select('sur_refl_b01').multiply(0.0001);
     return image.addBands(valor_ajustado, null, true).updateMask(Mask);
-  });
+  }).select('sur_refl_b01');
 
-    var datasetSRmean = datasetSR.mean();
- 
-    // Add the mean of each image as new properties of each feature.
-    var SR_means = datasetSRmean.reduceRegions({
-      collection: Grid,
-      reducer: ee.Reducer.mean(),
-      scale: datasetSR.first().projection().nominalScale(), //Product scale
-      crs: datasetSR.first().projection() //Product native scale
-    }).filter(ee.Filter.notNull(['sur_refl_b01']));
 
-    // Feature to Image
+    //compute collection average and (re)set projection
+  var meanSR = datasetSR.mean().setDefaultProjection(
+    datasetSR.first().projection(), null,
+    datasetSR.first().projection().nominalScale()
+    );
 
-    var SR_1km = SR_means.reduceToImage({
-      properties: ['sur_refl_b01'],
-      reducer: ee.Reducer.mean()
-    });
+  // Reduce Resolution to 1000m and reproject
+  var meanSR_RR = meanSR
+    .reduceResolution({reducer: ee.Reducer.mean()})
+    .reproject({crs: 'EPSG:3763', scale: 1000})
+    .rename('SR');
 
-    // add mean as band in the final result image
-    imgYear = imgYear.addBands(SR_1km.select('mean').rename('SR'), null);
+  // add band to imgYear
+  imgYear = imgYear.addBands(meanSR_RR);
 
 
   // ______ TSF ______
@@ -192,34 +162,29 @@ var Nextyear = ee.Number(year).add(1);
   datasetFire = datasetFire.filter(ee.Filter.calendarRange(2000, year, 'year')); 
   
     // Function to calculate TimeSinceFire (years, with decimal)
-
     var TSF_year = datasetFire.map(function(image) {
-      var subtraction = image.select('Year').subtract(Nextyear).multiply(-1).rename('TimeSinceFire');
+      var subtraction = image.select('Year').subtract(nextYear).multiply(-1).rename('TimeSinceFire');
       return image.addBands(subtraction);
     });
 
-    var TSF = TSF_year.min();
 
-    // Add the mean of each image as new properties of each feature.
+    //compute collection min and (re)set projection
+  var meanTSF = TSF_year.min().setDefaultProjection(
+    datasetSR.first().projection(), null,
+    datasetSR.first().projection().nominalScale()
+    );
 
-    var TSF_means = TSF.reduceRegions({
-      collection: Grid,
-      reducer: ee.Reducer.mean(),
-      scale: datasetFire.first().projection().nominalScale(), //Product scale
-      crs: datasetFire.first().projection() //Product native scale
-    }).filter(ee.Filter.notNull(['TimeSinceFire']));
+  // Reduce Resolution to 1000m and reproject
+  var meanTSF_RR = meanTSF.select('TimeSinceFire')
+    .reduceResolution({reducer: ee.Reducer.mean()})
+    .reproject({crs: 'EPSG:3763', scale: 1000})
+    .rename('TSF');
 
-  
-    // Feature to Image
+  // add band to imgYear
+  imgYear = imgYear.addBands(meanTSF_RR).unmask(23);
 
-    var TSF_1km = TSF_means.reduceToImage({
-      properties: ['TimeSinceFire'],
-      reducer: ee.Reducer.mean()
-    });
+// _______ end year ________
 
-    // add mean as band in the final result image
-    imgYear = imgYear.addBands(TSF_1km.select('mean').unmask(22).rename('TSF'), null);
-  
-
-  return imgYear;
+  // final results image with 6 bands
+  return imgYear.clip(grid);
 };
