@@ -1,5 +1,5 @@
 // Secondary script called by the main maxent modeling script
-// script adaptado de: developers.google.com/earth-engine/tutorials/community/nonparametric-trends
+// script adapted from: developers.google.com/earth-engine/tutorials/community/nonparametric-trends
 
 exports.mk_results = function(coll) {
 
