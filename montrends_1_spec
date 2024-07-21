@@ -1,25 +1,29 @@
 // this script implements MaxEnt modeling of 1 esp and calculates Mann-Kendall trends
 // calls two secondary scripts - external modules
 
-////////// external modules /////////////
-var predictorsYear = require('users/alirio/MontObEO:Modules/predictors.js');
-var mannKendall = require('users/alirio/MontObEO:Modules/kendallPValue.js');
+////////// external script modules /////////////
+
+var predictorsYear = require('users/montobeoproject/montrends:predictors.js');
+var mannKendall = require('users/montobeoproject/montrends:kendallPValue.js');
 
 ////////// imports
-var montesinho = ee.FeatureCollection("users/alirio/Montesinho_WGS_84");
-var grid = ee.FeatureCollection("users/alirio/Grid_1x1km_PNM-N_WGS84_Mercartor");
+var montesinho = ee.FeatureCollection("projects/ee-montobeo/assets/Montesinho_WGS_84");
+var grid = ee.FeatureCollection("projects/ee-montobeo/assets/grid_1km_PNM_N_epsg3763");
 
 var specie = 'Cervus_elaphus';
 var years = ee.List.sequence(2001, 2003);
 var replics = ee.List.sequence(1, 2);
 
-// Generate Background random points in presences region
-var Background = ee.FeatureCollection.randomPoints(montesinho, 857);
+// create points to sample background
+var gridGEE_3763_1000m = montesinho.geometry().coveringGrid('EPSG:3763', 1000)
+var background = gridGEE_3763_1000m.map(function getCentroid(f){
+    return f.centroid({'maxError': 1});
+  });
 
 
 ////////// presence data
 
-var presenceData = ee.FeatureCollection("users/alirio/montobeo/species_modelling_2024_05_02")
+var presenceData = ee.FeatureCollection("projects/ee-montobeo/assets/species_modelling_2024_07_15")
               .filter(ee.Filter.eq('Species', specie));
 
 //create grid only with species presence cells
@@ -28,7 +32,7 @@ var specieGrid = grid.filterBounds(presenceData)
 var trainingData = presenceData.map(function(feature){
     return feature.select([]).set('presence',1);
   })
-  .merge(Background.map(function(feature){
+  .merge(background.map(function(feature){
     return feature.select([]).set('presence',0);
   }));
 
