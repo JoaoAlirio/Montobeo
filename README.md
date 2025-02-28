@@ -10,6 +10,7 @@ Habitat trends in the Special Area of Conservation of Montesinho/Nogueira are ca
 Programming language is javascript, used to interact with the GEE platform.
 
 
+
 ### HS Trend Analysis - R script
 
 R script - **HS_Trend Analysis.R** - used to analyze the results of habitat suitability trends found in the Montobeo project
