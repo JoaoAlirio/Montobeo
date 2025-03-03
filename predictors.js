@@ -1,4 +1,5 @@
 // predictors.js - secondary script called by the main maxent modeling script
+// developed by João Alírio within the Montobeo project
 
 
 var grid = ee.FeatureCollection("users/alirio/Grids/grid_1km_PNM_N_epsg3763");
