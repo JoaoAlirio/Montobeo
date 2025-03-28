@@ -8,6 +8,7 @@ Habitat trends in the Special Area of Conservation of Montesinho/Nogueira are ca
 - **kendallPValue.js** is called to calculate the p-value of the trends.
 
 These scripts are also used in the **GEE App - Montrends**.
+
 Programming language is javascript, used to interact with the GEE platform.
 
 
